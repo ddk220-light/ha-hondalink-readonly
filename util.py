@@ -1,7 +1,51 @@
 from __future__ import annotations
 
+import math
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Any
+
+from .const import (
+    DEFAULT_SCAN_INTERVAL,
+    LEGACY_COMMAND_KEYS,
+    MAX_BACKOFF_INTERVAL,
+    MAX_SCAN_INTERVAL,
+    MIN_SCAN_INTERVAL,
+)
+
+
+def clamp_scan_interval(value: Any) -> int:
+    """Polling interval in whole minutes, clamped to [MIN_SCAN_INTERVAL, MAX_SCAN_INTERVAL]."""
+    if isinstance(value, bool):
+        return DEFAULT_SCAN_INTERVAL
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return DEFAULT_SCAN_INTERVAL
+    if math.isnan(number):
+        return DEFAULT_SCAN_INTERVAL
+    if number <= MIN_SCAN_INTERVAL:
+        return MIN_SCAN_INTERVAL
+    if number >= MAX_SCAN_INTERVAL:
+        return MAX_SCAN_INTERVAL
+    return int(number)
+
+
+def backoff_minutes(base: int, failures: int) -> int:
+    """Poll interval after consecutive failures: base, then x2, then x4, capped."""
+    if failures <= 0:
+        factor = 1
+    elif failures == 1:
+        factor = 2
+    else:
+        factor = 4
+    return min(base * factor, max(base, MAX_BACKOFF_INTERVAL))
+
+
+def strip_legacy_command_keys(mapping: Mapping[str, Any]) -> tuple[dict[str, Any], bool]:
+    """Copy of mapping without keys (remote PIN, lock codes) that other forks stored."""
+    cleaned = {key: value for key, value in mapping.items() if key not in LEGACY_COMMAND_KEYS}
+    return cleaned, len(cleaned) != len(mapping)
 
 
 def get_path(data: dict[str, Any], path: str, default: Any = None) -> Any:
@@ -108,18 +152,6 @@ def find_12v_battery_status(data: dict[str, Any]) -> Any:
     return _find_12v_battery_status(data)
 
 
-def find_12v_battery_candidates(data: dict[str, Any]) -> dict[str, Any]:
-    candidates: dict[str, Any] = {}
-    _collect_12v_battery_candidates(data, "", candidates)
-    return candidates
-
-
-def leaf_paths(data: dict[str, Any], *, limit: int = 300) -> list[str]:
-    paths: list[str] = []
-    _collect_leaf_paths(data, "", paths, limit)
-    return paths
-
-
 def _find_12v_warning_lamp_status(data: dict[str, Any]) -> Any:
     for group in get_path(data, "warningLamps.data", []) or []:
         if not isinstance(group, dict):
@@ -200,48 +232,6 @@ def _find_12v_battery_status(value: Any) -> Any:
     return None
 
 
-def _collect_12v_battery_candidates(value: Any, path: str, candidates: dict[str, Any]) -> None:
-    if len(candidates) >= 20:
-        return
-    if isinstance(value, dict):
-        for key, item in value.items():
-            item_path = f"{path}.{key}" if path else str(key)
-            if _looks_like_12v_battery_key(str(key)) or (
-                isinstance(item, str) and _text_mentions_12v_battery(item)
-            ):
-                candidate = value_from_status_node(item)
-                candidates[item_path] = _attribute_safe_value(
-                    candidate if candidate is not None else item
-                )
-            _collect_12v_battery_candidates(item, item_path, candidates)
-    elif isinstance(value, list):
-        for index, item in enumerate(value[:20]):
-            _collect_12v_battery_candidates(
-                item, f"{path}.{index}" if path else str(index), candidates
-            )
-
-
-def _collect_leaf_paths(value: Any, path: str, paths: list[str], limit: int) -> None:
-    if len(paths) >= limit:
-        return
-    if isinstance(value, dict):
-        if not value and path:
-            paths.append(path)
-            return
-        for key, item in value.items():
-            item_path = f"{path}.{key}" if path else str(key)
-            _collect_leaf_paths(item, item_path, paths, limit)
-    elif isinstance(value, list):
-        if not value and path:
-            paths.append(path)
-            return
-        for index, item in enumerate(value[:20]):
-            item_path = f"{path}.{index}" if path else str(index)
-            _collect_leaf_paths(item, item_path, paths, limit)
-    elif path:
-        paths.append(path)
-
-
 def _looks_like_12v_battery_key(key: str) -> bool:
     key_lower = key.lower()
     has_12v = (
@@ -269,19 +259,6 @@ def _text_mentions_12v_battery(text: str) -> bool:
     has_12v = "12v" in text_lower or "12 v" in text_lower or "12 volt" in text_lower
     has_battery = "battery" in text_lower or "batt" in text_lower
     return has_12v and has_battery
-
-
-def _attribute_safe_value(value: Any) -> Any:
-    if isinstance(value, (str, int, float, bool)) or value is None:
-        return value
-    if isinstance(value, dict):
-        safe: dict[str, Any] = {}
-        for key, item in list(value.items())[:10]:
-            safe[str(key)] = _attribute_safe_value(item)
-        return safe
-    if isinstance(value, list):
-        return [_attribute_safe_value(item) for item in value[:10]]
-    return str(value)
 
 
 def parse_iso_datetime(value: Any) -> datetime | None:

@@ -10,32 +10,23 @@ from homeassistant.core import callback
 from homeassistant.helpers import selector
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .api import HondaLinkAPI, HondaLinkAuthError, HondaLinkError
+from .api import HondaLinkAPI, HondaLinkAuthError, HondaLinkError, HondaLinkLoginBudgetError
 from .const import (
-    CONF_ACCESS_TOKEN,
-    CONF_CLIENT_REG_KEY,
-    CONF_COUNTRY,
-    CONF_DEVICE_ID,
     CONF_EMAIL,
-    CONF_EXPIRES_AT,
-    CONF_HIDAS_IDENT,
-    CONF_LANGUAGE,
-    CONF_LOCK_COMMAND,
+    CONF_LOGIN_FAILURES,
+    CONF_LOGIN_TIMES,
     CONF_NAME,
     CONF_PASSWORD,
-    CONF_PIN,
-    CONF_REFRESH_TOKEN,
     CONF_SCAN_INTERVAL,
-    CONF_SESSION_ID,
-    CONF_UNLOCK_COMMAND,
     CONF_VEHICLE_INFO,
     CONF_VIN,
-    DEFAULT_LOCK_COMMAND,
     DEFAULT_NAME,
     DEFAULT_SCAN_INTERVAL,
-    DEFAULT_UNLOCK_COMMAND,
     DOMAIN,
+    MAX_SCAN_INTERVAL,
+    MIN_SCAN_INTERVAL,
 )
+from .util import clamp_scan_interval, strip_legacy_command_keys
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -75,7 +66,6 @@ class HondaLinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             email = user_input[CONF_EMAIL].strip()
             password = user_input[CONF_PASSWORD]
-            pin = user_input[CONF_PIN].strip()
             vin = user_input.get(CONF_VIN, "").strip().upper()
             self._custom_name = user_input.get(CONF_NAME, "").strip() or None
             device_id = str(uuid.uuid4())
@@ -86,7 +76,6 @@ class HondaLinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 session,
                 email=email,
                 password=password,
-                pin=pin,
                 vin=vin or None,
                 device_id=device_id,
                 session_id=session_id,
@@ -95,14 +84,20 @@ class HondaLinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             try:
                 await api.async_login()
                 vehicles = await api.async_get_vehicles()
-            except HondaLinkAuthError as err:
-                _LOGGER.warning("HondaLink authentication failed during config flow: %s", err)
+            except HondaLinkAuthError:
+                _LOGGER.warning("HondaLink authentication failed during config flow")
                 errors["base"] = "invalid_auth"
+            except HondaLinkLoginBudgetError:
+                _LOGGER.warning("HondaLink sign-in skipped during config flow: too many attempts")
+                errors["base"] = "too_many_attempts"
             except HondaLinkError as err:
-                _LOGGER.warning("HondaLink connection failed during config flow: %s", err)
+                _LOGGER.warning(
+                    "HondaLink connection failed during config flow (%s)", type(err).__name__
+                )
                 errors["base"] = "cannot_connect"
-            except Exception:
-                _LOGGER.exception("Unexpected HondaLink config flow error")
+            except Exception as err:
+                # No traceback or message: it could carry account details or raw responses.
+                _LOGGER.error("Unexpected HondaLink config flow error (%s)", type(err).__name__)
                 errors["base"] = "unknown"
             else:
                 vehicle_info: dict[str, Any] | None = None
@@ -113,8 +108,8 @@ class HondaLinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                             vehicle_info = await api.async_get_vehicle_by_vin(vin)
                         except HondaLinkError as err:
                             _LOGGER.warning(
-                                "HondaLink VIN lookup failed during config flow: %s",
-                                err,
+                                "HondaLink VIN lookup failed during config flow (%s)",
+                                type(err).__name__,
                             )
                             vehicle_info = None
                 elif len(vehicles) == 1:
@@ -124,7 +119,7 @@ class HondaLinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 elif len(vehicles) > 1:
                     self._api = api
                     self._vehicles = vehicles
-                    self._base_data = self._entry_data(api, email, password, pin, "", None)
+                    self._base_data = self._entry_data(api, email, password, "", None)
                     return await self.async_step_vehicle()
                 else:
                     errors["base"] = "vin_required"
@@ -135,16 +130,13 @@ class HondaLinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     else:
                         api.vin = vin
                         return await self._async_create_vehicle_entry(
-                            api, email, password, pin, vin, vehicle_info
+                            api, email, password, vin, vehicle_info
                         )
 
         schema = vol.Schema(
             {
                 vol.Required(CONF_EMAIL): str,
                 vol.Required(CONF_PASSWORD): selector.TextSelector(
-                    selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
-                ),
-                vol.Required(CONF_PIN): selector.TextSelector(
                     selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
                 ),
                 vol.Optional(CONF_VIN, default=""): str,
@@ -166,8 +158,10 @@ class HondaLinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 async_get_clientsession(self.hass),
                 email=entry.data[CONF_EMAIL],
                 password=user_input[CONF_PASSWORD],
-                pin=entry.options.get(CONF_PIN, entry.data.get(CONF_PIN)),
                 vin=entry.data[CONF_VIN],
+                # Carry the stored attempts so re-entering a password can't bypass the budget.
+                login_times=entry.data.get(CONF_LOGIN_TIMES),
+                login_failures=entry.data.get(CONF_LOGIN_FAILURES),
             )
             try:
                 await api.async_login()
@@ -178,13 +172,24 @@ class HondaLinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     errors["base"] = "vehicle_not_found"
             except HondaLinkAuthError:
                 errors["base"] = "invalid_auth"
+            except HondaLinkLoginBudgetError:
+                errors["base"] = "too_many_attempts"
             except HondaLinkError:
                 errors["base"] = "cannot_connect"
-            if not errors:
+            if errors:
+                # Record this attempt even though it failed. Only the attempt times are saved:
+                # the stored tokens and password are left as they were.
+                auth_data = api.export_auth_data()
+                attempts = {key: auth_data[key] for key in (CONF_LOGIN_TIMES, CONF_LOGIN_FAILURES)}
+                if any(entry.data.get(key) != value for key, value in attempts.items()):
+                    self.hass.config_entries.async_update_entry(
+                        entry, data={**entry.data, **attempts}
+                    )
+            else:
                 self.hass.config_entries.async_update_entry(
                     entry,
                     data={
-                        **entry.data,
+                        **strip_legacy_command_keys(entry.data)[0],
                         CONF_PASSWORD: user_input[CONF_PASSWORD],
                         **api.export_auth_data(),
                     },
@@ -236,7 +241,6 @@ class HondaLinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         api: HondaLinkAPI,
         email: str,
         password: str,
-        pin: str,
         vin: str,
         vehicle_info: dict[str, Any] | None,
     ):
@@ -244,7 +248,7 @@ class HondaLinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._abort_if_unique_id_configured()
         return self.async_create_entry(
             title=_vehicle_title(vehicle_info, vin, self._custom_name),
-            data=self._entry_data(api, email, password, pin, vin, vehicle_info),
+            data=self._entry_data(api, email, password, vin, vehicle_info),
         )
 
     def _entry_data(
@@ -252,25 +256,16 @@ class HondaLinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         api: HondaLinkAPI,
         email: str,
         password: str,
-        pin: str,
         vin: str,
         vehicle_info: dict[str, Any] | None,
     ) -> dict[str, Any]:
         return {
             CONF_EMAIL: email,
             CONF_PASSWORD: password,
-            CONF_PIN: pin,
             CONF_VIN: vin,
             CONF_VEHICLE_INFO: vehicle_info or {},
-            CONF_CLIENT_REG_KEY: api.client_reg_key,
-            CONF_ACCESS_TOKEN: api.access_token,
-            CONF_REFRESH_TOKEN: api.refresh_token,
-            CONF_EXPIRES_AT: api.expires_at,
-            CONF_COUNTRY: api.country,
-            CONF_LANGUAGE: api.language,
-            CONF_HIDAS_IDENT: api.hidas_ident,
-            CONF_DEVICE_ID: api.device_id,
-            CONF_SESSION_ID: api.session_id,
+            # Tokens plus the sign-in attempt history, so the first sign-in counts too.
+            **api.export_auth_data(),
         }
 
     @staticmethod
@@ -280,30 +275,23 @@ class HondaLinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 class HondaLinkOptionsFlowHandler(config_entries.OptionsFlow):
+    """Only the polling interval is configurable; there are no command settings."""
+
     async def async_step_init(self, user_input: dict[str, Any] | None = None):
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
 
         options = self.config_entry.options
-        data = self.config_entry.data
         schema = vol.Schema(
             {
                 vol.Required(
-                    CONF_PIN, default=options.get(CONF_PIN, data.get(CONF_PIN, ""))
-                ): selector.TextSelector(
-                    selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
-                ),
-                vol.Required(
                     CONF_SCAN_INTERVAL,
-                    default=options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
-                ): vol.All(vol.Coerce(int), vol.Range(min=1, max=1440)),
-                vol.Required(
-                    CONF_LOCK_COMMAND, default=options.get(CONF_LOCK_COMMAND, DEFAULT_LOCK_COMMAND)
-                ): vol.In([DEFAULT_LOCK_COMMAND, "lck"]),
-                vol.Required(
-                    CONF_UNLOCK_COMMAND,
-                    default=options.get(CONF_UNLOCK_COMMAND, DEFAULT_UNLOCK_COMMAND),
-                ): vol.In([DEFAULT_UNLOCK_COMMAND, "ulk"]),
+                    default=clamp_scan_interval(
+                        options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
+                    ),
+                ): vol.All(
+                    vol.Coerce(int), vol.Range(min=MIN_SCAN_INTERVAL, max=MAX_SCAN_INTERVAL)
+                ),
             }
         )
         return self.async_show_form(step_id="init", data_schema=schema)

@@ -18,37 +18,8 @@ class HondaLinkButtonDescription(ButtonEntityDescription):
     press_fn: Callable[[HondaLinkDataUpdateCoordinator], object]
 
 
+# Read-only fork: the only button asks HondaLink for fresh vehicle data.
 BUTTONS: tuple[HondaLinkButtonDescription, ...] = (
-    HondaLinkButtonDescription(
-        key="start_engine",
-        translation_key="start_engine",
-        icon="mdi:engine",
-        press_fn=lambda coordinator: coordinator.async_start_engine(),
-    ),
-    HondaLinkButtonDescription(
-        key="stop_engine",
-        translation_key="stop_engine",
-        icon="mdi:engine-off",
-        press_fn=lambda coordinator: coordinator.async_stop_engine(),
-    ),
-    HondaLinkButtonDescription(
-        key="horn",
-        translation_key="horn",
-        icon="mdi:bullhorn",
-        press_fn=lambda coordinator: coordinator.async_horn(),
-    ),
-    HondaLinkButtonDescription(
-        key="lights",
-        translation_key="lights",
-        icon="mdi:car-light-high",
-        press_fn=lambda coordinator: coordinator.async_lights(),
-    ),
-    HondaLinkButtonDescription(
-        key="stop_horn_lights",
-        translation_key="stop_horn_lights",
-        icon="mdi:car-light-alert",
-        press_fn=lambda coordinator: coordinator.async_stop_horn_lights(),
-    ),
     HondaLinkButtonDescription(
         key="refresh",
         translation_key="refresh",
