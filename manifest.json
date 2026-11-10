@@ -1,13 +1,13 @@
 {
   "domain": "hondalink",
-  "name": "HondaLink",
-  "codeowners": ["@daviddelahoz"],
+  "name": "HondaLink (read-only)",
+  "codeowners": ["@ddk220-light"],
   "config_flow": true,
   "dependencies": [],
-  "documentation": "https://github.com/daviddelahoz/ha-hondalink",
+  "documentation": "https://github.com/ddk220-light/ha-hondalink-readonly",
   "iot_class": "cloud_polling",
-  "issue_tracker": "https://github.com/daviddelahoz/ha-hondalink/issues",
+  "issue_tracker": "https://github.com/ddk220-light/ha-hondalink-readonly/issues",
   "loggers": ["custom_components.hondalink"],
   "requirements": [],
-  "version": "0.1.8"
+  "version": "0.2.0"
 }

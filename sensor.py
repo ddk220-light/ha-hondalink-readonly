@@ -13,6 +13,7 @@ from homeassistant.components.sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     PERCENTAGE,
+    EntityCategory,
     UnitOfLength,
     UnitOfPressure,
     UnitOfSpeed,
@@ -24,10 +25,8 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .const import DATA_COORDINATOR, DOMAIN
 from .entity import HondaLinkEntity
 from .util import (
-    find_12v_battery_candidates,
     find_12v_battery_status,
     get_path,
-    leaf_paths,
     maintenance_messages,
     parse_iso_datetime,
     status_body,
@@ -51,7 +50,7 @@ SENSORS: tuple[HondaLinkSensorDescription, ...] = (
         key="fuel_level",
         translation_key="fuel_level",
         native_unit_of_measurement=PERCENTAGE,
-        device_class=SensorDeviceClass.BATTERY,
+        icon="mdi:gas-station",
         state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda body: to_int(get_path(body, "fuelLevel.currentLevel.value")),
     ),
@@ -91,11 +90,6 @@ SENSORS: tuple[HondaLinkSensorDescription, ...] = (
         key="12v_battery_status",
         translation_key="12v_battery_status",
         value_fn=find_12v_battery_status,
-        attr_fn=lambda body: {
-            "battery_candidates": find_12v_battery_candidates(body),
-            "dashboard_keys": sorted(body.keys()),
-            "dashboard_leaf_paths": leaf_paths(body),
-        },
     ),
     HondaLinkSensorDescription(
         key="front_left_tire_pressure",
@@ -163,7 +157,11 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     coordinator = hass.data[DOMAIN][entry.entry_id][DATA_COORDINATOR]
-    async_add_entities(HondaLinkSensor(coordinator, entry, description) for description in SENSORS)
+    entities: list[SensorEntity] = [
+        HondaLinkSensor(coordinator, entry, description) for description in SENSORS
+    ]
+    entities.append(HondaLinkLoginsTodaySensor(coordinator, entry))
+    async_add_entities(entities)
 
 
 class HondaLinkSensor(HondaLinkEntity, SensorEntity):
@@ -184,3 +182,30 @@ class HondaLinkSensor(HondaLinkEntity, SensorEntity):
         if self.entity_description.attr_fn is None:
             return None
         return self.entity_description.attr_fn(status_body(self.coordinator.data or {}))
+
+
+LOGINS_TODAY_DESCRIPTION = SensorEntityDescription(
+    key="logins_today",
+    translation_key="logins_today",
+    entity_category=EntityCategory.DIAGNOSTIC,
+    state_class=SensorStateClass.MEASUREMENT,
+    icon="mdi:login",
+)
+
+
+class HondaLinkLoginsTodaySensor(HondaLinkEntity, SensorEntity):
+    """Password sign-ins in the last 24 hours (read from the API client, not the dashboard)."""
+
+    entity_description: SensorEntityDescription
+
+    def __init__(self, coordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry, LOGINS_TODAY_DESCRIPTION.key)
+        self.entity_description = LOGINS_TODAY_DESCRIPTION
+
+    @property
+    def native_value(self) -> int:
+        return self.coordinator.api.logins_last_day()
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {"failed": self.coordinator.api.login_failures_last_day()}

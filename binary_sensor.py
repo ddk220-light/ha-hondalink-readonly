@@ -15,7 +15,14 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DATA_COORDINATOR, DOMAIN
 from .entity import HondaLinkEntity
-from .util import any_light_on, any_open_state, engine_running, get_path, status_body
+from .util import (
+    all_door_locks_locked,
+    any_light_on,
+    any_open_state,
+    engine_running,
+    get_path,
+    status_body,
+)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -27,7 +34,19 @@ DOOR_KEYS = ["firstRowDriver", "firstRowPassenger", "secondRowDriver", "secondRo
 WINDOW_KEYS = ["frontWindowDR", "frontWindowAS", "rearWindowRR", "rearWindowRL"]
 
 
+def _doors_unlocked(body: dict[str, Any]) -> bool | None:
+    """LOCK device class: on means unlocked, off means locked, None means unknown."""
+    locked = all_door_locks_locked(body)
+    return None if locked is None else not locked
+
+
 BINARY_SENSORS: tuple[HondaLinkBinarySensorDescription, ...] = (
+    HondaLinkBinarySensorDescription(
+        key="door_locks",
+        translation_key="door_locks",
+        device_class=BinarySensorDeviceClass.LOCK,
+        value_fn=_doors_unlocked,
+    ),
     HondaLinkBinarySensorDescription(
         key="any_door_open",
         translation_key="any_door_open",

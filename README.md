@@ -2,161 +2,185 @@
   <img src="assets/logo.png" alt="HondaLink Home Assistant integration logo" width="180">
 </p>
 
-[![HACS Custom](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://hacs.xyz/)
-[![Version](https://img.shields.io/github/v/release/daviddelahoz/ha-hondalink)](https://github.com/daviddelahoz/ha-hondalink/releases)
-[![License](https://img.shields.io/github/license/daviddelahoz/ha-hondalink)](LICENSE)
-[![Maintenance](https://img.shields.io/maintenance/yes/2026.svg)](https://github.com/daviddelahoz/ha-hondalink)
+# HondaLink (read-only) for Home Assistant
 
-# HondaLink for Home Assistant
+An unofficial, **read-only** Home Assistant custom integration for HondaLink connected vehicles.
+It shows the status your car reports to Honda's cloud. It cannot control the car.
 
-Unofficial Home Assistant custom integration for HondaLink MY21 telematics vehicles.
+> This project is not affiliated with, endorsed by, or supported by Honda. HondaLink is a
+> trademark of its respective owner.
 
-This integration uses the HondaLink Android app API flow, observed while debugging the app, to discover vehicles, poll vehicle state, and expose supported remote commands in Home Assistant.
+This is a fork of [Space-C0wboy/ha-hondalink](https://github.com/Space-C0wboy/ha-hondalink), which
+is itself a fork of [daviddelahoz/ha-hondalink](https://github.com/daviddelahoz/ha-hondalink). The
+remote-control features of those projects have been removed.
 
-> This project is not affiliated with, endorsed by, or supported by Honda. HondaLink is a trademark of its respective owner.
+## What "read-only" means
 
-## Features
+- There is no lock entity and there are no engine start/stop, horn or lights buttons.
+- The HondaLink remote PIN is never asked for, stored or sent.
+- Sign-in requests go to Honda's identity server (`identity.services.honda.com`): client
+  registration and token generation. They send your email and password and nothing else.
+- Every request to the vehicle API (`wsc.hondaweb.com`) goes through an allowlist in `api.py`.
+  Only these are permitted: vehicle lookup, reading the stored dashboard status, and the PIN-free
+  "Refresh" request (and its result) that asks the car to report fresh status. Anything else is
+  refused before it is sent, and so is any request body containing a PIN.
+- If you previously used another fork that stored a remote PIN or lock/unlock command codes in
+  the config entry, they are deleted the first time this integration starts.
 
-- Fuel level, range, odometer, oil life, Maintenance Minder items, cabin temperature, 12V battery status, tire pressure, vehicle speed, and last update sensors
-- Door, hood, trunk, window (each door and window individually, plus any-open), lights, warning lamp, and remote engine binary sensors
-- Lock and unlock entity for supported vehicles
-- Buttons for engine start, engine stop, horn, lights, stop horn/lights, and refresh
-- Device tracker from vehicle GPS data when returned by the HondaLink API, with Honda's photo of the vehicle
-- Re-authentication prompt when the HondaLink password changes
-- Redacted diagnostics download (credentials, tokens, VIN, email, and GPS coordinates removed)
-- Configurable lock and unlock command codes for vehicles or markets that use alternate CIG command names
+## What it shows
 
-## Status
+Sensors:
 
-This is early custom-component work built from a validated HondaLink Android app flow observed during app debugging. It has been tested against a MY21 HondaLink telematics flow, but Honda can change these private endpoints at any time.
+- Fuel level, range, odometer, oil life
+- 12 V battery status
+- Tyre pressures (each tyre)
+- Vehicle speed, cabin temperature
+- Maintenance items (Maintenance Minder)
+- Last update time
+- Diagnostic: sign-ins in the last 24 hours
+
+Binary sensors:
+
+- Doors (each door and any-open), windows (each window and any-open), hood, trunk
+- Door locks (status only; you cannot lock or unlock from Home Assistant)
+- Lights, warning lamp, engine running
+
+Other:
+
+- Device tracker from the vehicle's GPS location, when Honda returns it
+- A "Refresh" button that asks the car for fresh status
+
+Fields are only populated when Honda's dashboard data contains them, so some entities may be
+unavailable on some vehicles.
+
+## Account safety
+
+Using an unofficial API on a real account carries some risk. This integration tries to keep its
+traffic low and predictable:
+
+- Polls the stored status every 15 minutes by default. The minimum is 5 minutes.
+- Limits failed password sign-ins, which are what can lock an account, to 3 per hour and 8 per
+  24 hours. A sign-in whose outcome is unknown (for example a timeout) counts as failed.
+- Also limits all password sign-ins, successful or not, to 6 per hour and 100 per 24 hours, as a
+  guard against a sign-in loop.
+- Once any limit is reached it does not try to sign in again until the rolling window has passed.
+  The attempt history is saved, so restarting Home Assistant or re-entering the password does not
+  reset it.
+- On repeated failures it backs off: 15, then 30, then 60 minutes between attempts.
+- An authentication failure stops polling and asks you to sign in again (re-authentication)
+  instead of retrying with the same credentials.
+- "Refresh" can be used at most once every 15 minutes. Each press asks the car's telematics unit
+  to wake up and report, so use it sparingly.
+
+These limits reduce the risk but cannot remove it. Honda can change or block this private API at
+any time, and this fork has not yet been verified on every model year. Its checks are covered by
+offline unit tests only.
 
 ## Installation
 
-### HACS
-
-This repository is ready for HACS custom repository installation.
-
-1. In Home Assistant, open HACS.
-2. Go to Integrations.
-3. Open Custom repositories.
-4. Add this repository URL.
-5. Choose category `Integration`.
-6. Install `HondaLink`.
-7. Restart Home Assistant.
-
 ### Manual
 
-Copy the integration folder to Home Assistant:
+Copy the contents of this repository into:
 
 ```text
-/config/custom_components/hondalink
+/config/custom_components/hondalink/
 ```
 
 Then restart Home Assistant.
 
+### HACS (custom repository)
+
+1. In Home Assistant, open HACS.
+2. Open the menu and choose Custom repositories.
+3. Add `https://github.com/ddk220-light/ha-hondalink-readonly` with category `Integration`.
+4. Install `HondaLink (read-only)`.
+5. Restart Home Assistant.
+
+This integration uses the domain `hondalink`, so it replaces (and cannot run alongside) the
+upstream HondaLink integrations. Remove those first.
+
 ## Setup
 
-In Home Assistant, go to:
+Go to:
 
 ```text
-Settings > Devices & services > Add integration > HondaLink
+Settings > Devices & services > Add integration > HondaLink (read-only)
 ```
 
-The config flow asks for:
+The setup form asks for:
 
 - HondaLink email
 - HondaLink password
-- Remote PIN from the HondaLink app
-- VIN, optional if the vehicle can be discovered automatically
-- Name, optional display name
+- VIN (optional, if the vehicle can be found automatically)
+- Name (optional display name)
 
-If auto-discovery returns no vehicles, enter the VIN manually.
+If no vehicle is found automatically, enter the VIN manually.
 
-## API Flow
+After setup, the integration options let you change the polling interval.
 
-The integration currently follows this sequence:
+## If you want remote lock or remote start
 
-1. Register app client with HIDAS.
-2. Generate a HIDAS bearer token.
-3. Discover vehicles from `GET /REST/NGT/MyVehicle/1.0`.
-4. Poll latest vehicle state from `POST /REST/NGT/CIG/dbd/latest/{VIN}`.
-5. Send remote CIG commands through `POST /REST/NGT/CIG/{engine}/async/{command}`.
-6. Poll command results from `GET /REST/NGT/CIG/{engine}/results/{request_id}`.
+This fork deliberately does not support them. Use one of the upstream projects instead:
 
-### Token Generation
-
-The live HIDAS token endpoint expects these form fields:
-
-```text
-username=<email>
-password=<password>
-description=Android
-client_reg_key=<client_reg_key>
-```
-
-Earlier app-debugging notes may mention `email` and `device_description`, but those fields are not the confirmed working request shape for the live endpoint.
-
-## Options
-
-After setup, open the integration options to change:
-
-- Remote PIN
-- Polling interval
-- Lock command code
-- Unlock command code
-
-The default lock command is `alk`; the default unlock command is `dulk`.
+- [daviddelahoz/ha-hondalink](https://github.com/daviddelahoz/ha-hondalink)
+- [Space-C0wboy/ha-hondalink](https://github.com/Space-C0wboy/ha-hondalink)
 
 ## Troubleshooting
 
 ### Could not connect to HondaLink
 
-Restart Home Assistant after updating the custom component, then try setup again. The config flow logs a generic error and, where relevant, an allowlisted error code, so check Home Assistant logs for:
+Restart Home Assistant after updating the custom component, then try setup again. The config flow
+logs a generic error and, where relevant, an allowlisted error code, so check the Home Assistant
+logs for:
 
 ```text
 HondaLink connection failed during config flow
 ```
 
-### Invalid credentials or remote PIN
+### Invalid credentials
 
-Confirm that the same email, password, and remote PIN work in the HondaLink mobile app. Some HondaLink accounts may require accepting updated terms or completing account verification in the app before API login succeeds.
+Confirm that the same email and password work in the HondaLink mobile app. Some HondaLink accounts
+need you to accept updated terms or complete account verification in the app before sign-in
+succeeds.
 
 ### No vehicle discovered
 
-Enter the VIN manually in the setup form. The integration will still try to fetch vehicle details by VIN after login.
+Enter the VIN manually in the setup form. The integration will still try to fetch the vehicle
+details by VIN after sign-in.
 
-## Security
+### Data stopped updating
 
-- This integration stores your HondaLink email, password, and remote PIN in the Home Assistant config entry so it can re-authenticate after token expiry.
-- The Honda app `CLIENT_ID` and `CLIENT_SECRET` values are app-level credentials observed from the HondaLink mobile app flow, not user-specific credentials. Honda ships and uses them as part of the mobile app authentication flow, which this integration mirrors.
-- Honda may rotate or revoke those app-level credentials at any time. If that happens, authentication can stop working for all users until the integration is updated.
-- Do not share logs or diagnostics that include tokens, remote PIN, VIN, or GPS coordinates.
-- Remote commands can physically affect your vehicle. Use this only with your own HondaLink account and vehicle.
+Check the "Sign-ins in the last 24 hours" sensor (its `failed` attribute counts failed sign-ins)
+and the Home Assistant logs. If a sign-in limit was reached, or the integration is backing off after failures, it resumes on its own once the
+window passes. If Home Assistant shows a re-authentication prompt, sign in again there.
 
-## Support
+## Security and privacy
 
-<a href="https://www.buymeacoffee.com/daviddelahoz" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" style="height: 60px !important;width: 217px !important;" ></a>
+- Your HondaLink email and password are stored in the Home Assistant config entry so the
+  integration can sign in again when its token expires. No PIN is stored.
+- The Honda app `CLIENT_ID` and `CLIENT_SECRET` values are app-level credentials observed from the
+  HondaLink mobile app, not user-specific credentials. Honda may rotate or revoke them at any time,
+  which would stop sign-in from working until the integration is updated.
+- The diagnostics download redacts credentials, tokens, VIN, email and GPS coordinates. Still,
+  do not share logs or diagnostics that might contain them.
 
-## Known Limitations
+## Known limitations
 
-- Tested against a MY21 telematics HondaLink flow.
-- EV fields are exposed only when the Honda dashboard payload returns actual values.
-- Lock and unlock command behavior may vary by vehicle, subscription, market, or Honda API changes.
-- HondaLink is a private cloud API; reliability depends on Honda's service and endpoint compatibility.
+- HondaLink is a private cloud API; reliability depends on Honda's service and endpoint
+  compatibility.
+- EV fields are shown only when Honda's dashboard data returns actual values.
+- Not verified on every model year, market or subscription.
 
-## Credits
+## Credits and licence
 
-- [David De La Hoz](https://github.com/daviddelahoz): original integration ([daviddelahoz/ha-hondalink](https://github.com/daviddelahoz/ha-hondalink)).
-- [Brian Crook (@bcrook)](https://github.com/bcrook): fix for 401 errors after the HondaLink 5.5.0 gateway update ([PR #5](https://github.com/daviddelahoz/ha-hondalink/pull/5)). His fork ([bcrook/ha-hondalink](https://github.com/bcrook/ha-hondalink)) also first explored diagnostics, cabin temperature, and the TrackerEntity import fix.
-- [@berkman](https://github.com/berkman): options-flow crash fix and applying options without a restart ([PR #3](https://github.com/daviddelahoz/ha-hondalink/pull/3)), adapted by Costya-Y.
-- [Constantine Yevdiukhin (@Costya-Y)](https://github.com/Costya-Y): security and reliability hardening, re-authentication flow, remote-command result handling, door lock-state logic, and the offline regression tests ([Costya-Y/ha-hondalink](https://github.com/Costya-Y/ha-hondalink)).
+MIT licence; see [LICENSE](LICENSE).
 
-## Local Development
-
-Useful validation commands:
-
-```powershell
-python -m py_compile .\api.py .\config_flow.py
-```
-
-HACS and hassfest workflow files are included under `.github/workflows/`.
+- [David De La Hoz](https://github.com/daviddelahoz): original integration
+  ([daviddelahoz/ha-hondalink](https://github.com/daviddelahoz/ha-hondalink)).
+- [Space-C0wboy](https://github.com/Space-C0wboy): the fork this one is based on
+  ([Space-C0wboy/ha-hondalink](https://github.com/Space-C0wboy/ha-hondalink)).
+- Contributors to the upstream projects, including
+  [Brian Crook (@bcrook)](https://github.com/bcrook) (fix for 401 errors after the HondaLink 5.5.0
+  gateway update), [@berkman](https://github.com/berkman) (options-flow fixes) and
+  [Constantine Yevdiukhin (@Costya-Y)](https://github.com/Costya-Y) (security and reliability
+  hardening, re-authentication flow, door lock-state logic, offline tests).

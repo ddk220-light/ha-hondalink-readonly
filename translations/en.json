@@ -3,11 +3,10 @@
     "step": {
       "user": {
         "title": "HondaLink",
-        "description": "Enter your HondaLink account, remote PIN, and optionally a VIN. If VIN is blank, the integration will try to discover vehicles from the account.",
+        "description": "This is a read-only integration: it only needs your HondaLink email and password, and it cannot lock, unlock or start the car. Optionally enter a VIN; if it is blank, the integration will try to discover vehicles from the account.",
         "data": {
           "email": "Email",
           "password": "Password",
-          "pin": "Remote PIN",
           "vin": "VIN",
           "name": "Name"
         }
@@ -29,10 +28,11 @@
     },
     "error": {
       "cannot_connect": "Could not connect to HondaLink.",
-      "invalid_auth": "Invalid HondaLink credentials or remote PIN.",
+      "invalid_auth": "Invalid HondaLink email or password.",
       "unknown": "Unexpected error.",
       "vin_required": "No vehicle was discovered. Enter the VIN manually.",
-      "vehicle_not_found": "The configured vehicle was not found in this account."
+      "vehicle_not_found": "The configured vehicle was not found in this account.",
+      "too_many_attempts": "Too many sign-in attempts. To protect your Honda account, sign-in is paused for up to 24 hours. Try again later."
     },
     "abort": {
       "already_configured": "This vehicle is already configured.",
@@ -43,12 +43,9 @@
   "options": {
     "step": {
       "init": {
-        "title": "HondaLink options",
+        "title": "HondaLink (read-only) options",
         "data": {
-          "pin": "Remote PIN",
-          "scan_interval": "Polling interval in minutes",
-          "lock_command": "Lock command code",
-          "unlock_command": "Unlock command code"
+          "scan_interval": "Polling interval in minutes"
         }
       }
     }
@@ -96,6 +93,9 @@
       },
       "cabin_temperature": {
         "name": "Cabin temperature"
+      },
+      "logins_today": {
+        "name": "Sign-ins in the last 24 hours"
       }
     },
     "binary_sensor": {
@@ -143,31 +143,14 @@
       },
       "rear_right_window": {
         "name": "Rear right window"
+      },
+      "door_locks": {
+        "name": "Door locks"
       }
     },
     "button": {
-      "start_engine": {
-        "name": "Start engine"
-      },
-      "stop_engine": {
-        "name": "Stop engine"
-      },
-      "horn": {
-        "name": "Horn"
-      },
-      "lights": {
-        "name": "Lights"
-      },
-      "stop_horn_lights": {
-        "name": "Stop horn/lights"
-      },
       "refresh": {
         "name": "Refresh"
-      }
-    },
-    "lock": {
-      "doors": {
-        "name": "Doors"
       }
     },
     "device_tracker": {
